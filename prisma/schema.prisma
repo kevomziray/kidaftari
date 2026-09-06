@@ -1,0 +1,606 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Customer-facing language. English is the default; Swahili is ready for all
+/// customer communications and reminders.
+enum Locale {
+  EN
+  SW
+}
+
+/// A user belongs to exactly one business. This keeps every authenticated request
+/// in a single tenant boundary; staff access is never inferred from client input.
+enum UserRole {
+  OWNER
+  STAFF
+}
+
+/// Financial rows are retained forever. A correction marks the original row as
+/// REVERSED or CANCELLED and records the reason and actor instead of overwriting it.
+enum FinancialStatus {
+  ACTIVE
+  REVERSED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  MOBILE_MONEY
+  BANK
+  OTHER
+
+  @@map("PaymentMethodV2")
+}
+
+enum ReminderKind {
+  DUE_SOON
+  DUE_TODAY
+  OVERDUE
+  MANUAL
+
+  @@map("ReminderKindV2")
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+
+  @@map("ReminderStatusV2")
+}
+
+enum SmsType {
+  PAYMENT_CONFIRMATION
+  CREDIT_CREATED
+  REMINDER
+  STATEMENT
+  OTHER
+}
+
+/// Provider and delivery state remain intentionally extensible so a provider can
+/// be swapped without changing customer, transaction, or reminder data.
+enum SmsProvider {
+  MOCK
+  BEEM
+  AFRICAS_TALKING
+  TWILIO
+  CUSTOM
+}
+
+enum SmsStatus {
+  QUEUED
+  PROCESSING
+  SENT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+// -----------------------------------------------------------------------------
+// Canonical Stage 2 tenant models
+// -----------------------------------------------------------------------------
+
+model Business {
+  id                          String   @id @default(uuid()) @db.Uuid
+  businessName                String   @map("name") @db.VarChar(160)
+  businessPhone               String?  @map("phone") @db.VarChar(32)
+  businessEmail               String?  @map("email") @db.VarChar(320)
+  address                     String?  @db.Text
+  currency                    String   @default("TZS") @db.Char(3)
+  timezone                    String   @default("Africa/Dar_es_Salaam") @db.VarChar(64)
+  language                    Locale   @default(EN) @map("locale")
+  active                      Boolean  @default(true) @map("isActive")
+  defaultCreditDueDays        Int      @default(7)
+  remindersEnabled            Boolean  @default(true)
+  reminderDaysBeforeDue       Int      @default(1)
+  overdueReminderIntervalDays Int      @default(7)
+  reminderLocalTime           String   @default("09:00") @db.VarChar(5)
+  sendPaymentConfirmations    Boolean  @default(true)
+  allowCustomerOverpayments   Boolean  @default(false)
+  smsSenderId                 String?  @db.VarChar(32)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  users              User[]              @relation("BusinessUsers")
+  customers          Customer[]          @relation("BusinessCustomers")
+  creditTransactions CreditTransaction[] @relation("BusinessCreditTransactions")
+  payments           Payment[]           @relation("BusinessPayments")
+  reminders          Reminder[]          @relation("BusinessReminders")
+  smsMessages        SmsMessage[]        @relation("BusinessSmsMessages")
+  auditLogs          AuditLog[]          @relation("BusinessAuditLogs")
+
+  // Read-only compatibility mappings for the Stage 1 ledger. The Stage 2
+  // application writes only the canonical models above; these preserve existing
+  // deployed data while it is backfilled by the Stage 2 migration.
+  legacyMemberships       LegacyBusinessMembership[] @relation("LegacyMembershipBusiness")
+  legacyLedgerEntries     LegacyLedgerEntry[]        @relation("LegacyLedgerBusiness")
+  legacyReminderSchedules LegacyReminderSchedule[]   @relation("LegacyReminderBusiness")
+  legacySmsMessages       LegacySmsMessage[]         @relation("LegacySmsBusiness")
+
+  @@index([active], map: "Business_isActive_idx")
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  businessId   String    @db.Uuid
+  name         String    @db.VarChar(160)
+  email        String    @unique @db.VarChar(320)
+  phone        String?   @db.VarChar(32)
+  passwordHash String    @db.VarChar(255)
+  role         UserRole  @default(STAFF)
+  active       Boolean   @default(true) @map("isActive")
+  language     Locale    @default(EN) @map("locale")
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business                   Business             @relation("BusinessUsers", fields: [businessId], references: [id], onDelete: Restrict)
+  createdCustomers           Customer[]           @relation("CustomerCreatedBy")
+  updatedCustomers           Customer[]           @relation("CustomerUpdatedBy")
+  createdCreditTransactions  CreditTransaction[]  @relation("CreditCreatedBy")
+  reversedCreditTransactions CreditTransaction[]  @relation("CreditReversedBy")
+  recordedPayments           Payment[]            @relation("PaymentCreatedBy")
+  reversedPayments           Payment[]            @relation("PaymentReversedBy")
+  createdReminders           Reminder[]           @relation("ReminderCreatedBy")
+  createdSmsMessages         SmsMessage[]         @relation("SmsCreatedBy")
+  auditLogs                  AuditLog[]           @relation("AuditUser")
+  sessions                   UserSession[]
+  passwordResetTokens        PasswordResetToken[]
+
+  legacyMemberships        LegacyBusinessMembership[] @relation("LegacyMembershipUser")
+  legacyInvitedMemberships LegacyBusinessMembership[] @relation("LegacyMembershipInvitedBy")
+  legacyLedgerEntries      LegacyLedgerEntry[]        @relation("LegacyLedgerRecordedBy")
+  legacyReminderSchedules  LegacyReminderSchedule[]   @relation("LegacyReminderCreatedBy")
+  legacySmsMessages        LegacySmsMessage[]         @relation("LegacySmsCreatedBy")
+
+  @@unique([businessId, id])
+  @@index([businessId, active])
+  @@index([active], map: "User_isActive_idx")
+}
+
+/// A secure, revocable server-side session. Only a hash of the browser token is
+/// persisted, so a database leak cannot replay an active browser session.
+model UserSession {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique @db.VarChar(255)
+  expiresAt  DateTime
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  ipAddress  String?   @db.VarChar(64)
+  userAgent  String?   @db.VarChar(512)
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(255)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model Customer {
+  id                String    @id @default(uuid()) @db.Uuid
+  businessId        String    @db.Uuid
+  customerNumber    String    @db.VarChar(50)
+  fullName          String    @db.VarChar(160)
+  phone             String?   @db.VarChar(32)
+  alternativePhone  String?   @db.VarChar(32)
+  /// Preserves an existing normalized-phone column while `phone` remains the
+  /// canonical customer phone field used by Stage 2 services.
+  normalizedPhone   String?   @map("phoneE164") @db.VarChar(20)
+  email             String?   @db.VarChar(320)
+  address           String?   @db.Text
+  defaultDueDays    Int?
+  creditLimit       Int?
+  reminderEnabled   Boolean   @default(true)
+  reminderFrequency Int       @default(7)
+  preferredLanguage Locale    @default(EN)
+  notes             String?   @db.Text
+  active            Boolean   @default(true) @map("isActive")
+  archivedAt        DateTime?
+  createdById       String?   @db.Uuid
+  updatedById       String?   @db.Uuid
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  business           Business            @relation("BusinessCustomers", fields: [businessId], references: [id], onDelete: Restrict)
+  createdBy          User?               @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy          User?               @relation("CustomerUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  creditTransactions CreditTransaction[] @relation("CustomerCreditTransactions")
+  payments           Payment[]           @relation("CustomerPayments")
+  reminders          Reminder[]          @relation("CustomerReminders")
+  smsMessages        SmsMessage[]        @relation("CustomerSmsMessages")
+
+  legacyLedgerEntries     LegacyLedgerEntry[]      @relation("LegacyLedgerCustomer")
+  legacyReminderSchedules LegacyReminderSchedule[] @relation("LegacyReminderCustomer")
+  legacySmsMessages       LegacySmsMessage[]       @relation("LegacySmsCustomer")
+
+  @@unique([businessId, customerNumber])
+  /// Supports migration-level composite foreign keys which prevent a financial
+  /// row from naming a customer from another business.
+  @@unique([businessId, id])
+  @@index([businessId, fullName])
+  @@index([businessId, phone])
+  @@index([businessId, active], map: "Customer_businessId_isActive_idx")
+}
+
+/// Immutable customer credit. The app never updates amount/customer/date fields;
+/// corrections create a new row and mark this row REVERSED with the audit reason.
+model CreditTransaction {
+  id                String          @id @default(uuid()) @db.Uuid
+  businessId        String          @db.Uuid
+  customerId        String          @db.Uuid
+  transactionNumber String          @db.VarChar(64)
+  description       String?         @db.Text
+  amount            Int
+  transactionDate   DateTime        @default(now())
+  dueDate           DateTime?       @db.Date
+  status            FinancialStatus @default(ACTIVE)
+  idempotencyKey    String?         @db.VarChar(191)
+  correctionOfId    String?         @db.Uuid
+  reversedAt        DateTime?
+  reversedById      String?         @db.Uuid
+  reversalReason    String?         @db.Text
+  createdById       String?         @db.Uuid
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  business     Business            @relation("BusinessCreditTransactions", fields: [businessId], references: [id], onDelete: Restrict)
+  customer     Customer            @relation("CustomerCreditTransactions", fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy    User?               @relation("CreditCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  reversedBy   User?               @relation("CreditReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  correctionOf CreditTransaction?  @relation("CreditCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections  CreditTransaction[] @relation("CreditCorrection")
+  reminders    Reminder[]          @relation("CreditReminders")
+  smsMessages  SmsMessage[]        @relation("CreditSmsMessages")
+
+  @@unique([businessId, transactionNumber])
+  @@unique([businessId, id])
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, customerId, transactionDate])
+  @@index([businessId, status, dueDate])
+  @@index([customerId, dueDate])
+}
+
+/// Immutable recorded payment. It may be reversed/cancelled, but its financial
+/// amount, payer, and date are never overwritten.
+model Payment {
+  id             String          @id @default(uuid()) @db.Uuid
+  businessId     String          @db.Uuid
+  customerId     String          @db.Uuid
+  paymentNumber  String          @db.VarChar(64)
+  amount         Int
+  paymentMethod  PaymentMethod
+  reference      String?         @db.VarChar(120)
+  paymentDate    DateTime        @default(now())
+  notes          String?         @db.Text
+  status         FinancialStatus @default(ACTIVE)
+  idempotencyKey String?         @db.VarChar(191)
+  correctionOfId String?         @db.Uuid
+  reversedAt     DateTime?
+  reversedById   String?         @db.Uuid
+  reversalReason String?         @db.Text
+  createdById    String?         @db.Uuid
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  business     Business     @relation("BusinessPayments", fields: [businessId], references: [id], onDelete: Restrict)
+  customer     Customer     @relation("CustomerPayments", fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy    User?        @relation("PaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  reversedBy   User?        @relation("PaymentReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  correctionOf Payment?     @relation("PaymentCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections  Payment[]    @relation("PaymentCorrection")
+  smsMessages  SmsMessage[] @relation("PaymentSmsMessages")
+
+  @@unique([businessId, paymentNumber])
+  @@unique([businessId, id])
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, customerId, paymentDate])
+  @@index([businessId, status, paymentDate])
+  @@index([businessId, reference])
+}
+
+/// A durable reminder job. Cancelling/failing a reminder never changes the
+/// related credit transaction or the customer's balance.
+model Reminder {
+  id                  String         @id @default(uuid()) @db.Uuid
+  businessId          String         @db.Uuid
+  customerId          String         @db.Uuid
+  creditTransactionId String?        @db.Uuid
+  kind                ReminderKind   @default(DUE_TODAY)
+  scheduledAt         DateTime
+  processingAt        DateTime?
+  sentAt              DateTime?
+  status              ReminderStatus @default(PENDING)
+  message             String         @db.Text
+  failureReason       String?        @db.Text
+  idempotencyKey      String         @unique @db.VarChar(191)
+  createdById         String?        @db.Uuid
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  business          Business           @relation("BusinessReminders", fields: [businessId], references: [id], onDelete: Restrict)
+  customer          Customer           @relation("CustomerReminders", fields: [customerId], references: [id], onDelete: Restrict)
+  creditTransaction CreditTransaction? @relation("CreditReminders", fields: [creditTransactionId], references: [id], onDelete: Restrict)
+  createdBy         User?              @relation("ReminderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  smsMessage        SmsMessage?        @relation("ReminderSmsMessage")
+
+  @@unique([businessId, id])
+  @@index([status, scheduledAt])
+  @@index([businessId, customerId, scheduledAt])
+  @@index([businessId, creditTransactionId])
+}
+
+/// Provider-neutral outgoing SMS audit and delivery record. Secrets and provider
+/// credentials stay in environment variables; only delivery metadata is stored.
+model SmsMessage {
+  id                  String      @id @default(uuid()) @db.Uuid
+  businessId          String      @db.Uuid
+  customerId          String?     @db.Uuid
+  creditTransactionId String?     @db.Uuid
+  paymentId           String?     @db.Uuid
+  reminderId          String?     @unique @db.Uuid
+  type                SmsType
+  phoneNumber         String      @db.VarChar(32)
+  message             String      @db.Text
+  provider            SmsProvider @default(MOCK)
+  providerMessageId   String?     @db.VarChar(191)
+  status              SmsStatus   @default(QUEUED)
+  cost                Int?
+  idempotencyKey      String      @unique @db.VarChar(191)
+  senderId            String?     @db.VarChar(32)
+  attemptCount        Int         @default(0)
+  scheduledAt         DateTime?
+  lastAttemptAt       DateTime?
+  sentAt              DateTime?
+  failureReason       String?     @db.Text
+  createdById         String?     @db.Uuid
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  business          Business           @relation("BusinessSmsMessages", fields: [businessId], references: [id], onDelete: Restrict)
+  customer          Customer?          @relation("CustomerSmsMessages", fields: [customerId], references: [id], onDelete: SetNull)
+  creditTransaction CreditTransaction? @relation("CreditSmsMessages", fields: [creditTransactionId], references: [id], onDelete: Restrict)
+  payment           Payment?           @relation("PaymentSmsMessages", fields: [paymentId], references: [id], onDelete: Restrict)
+  reminder          Reminder?          @relation("ReminderSmsMessage", fields: [reminderId], references: [id], onDelete: Restrict)
+  createdBy         User?              @relation("SmsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerMessageId])
+  @@index([status, scheduledAt])
+  @@index([businessId, customerId, createdAt])
+  @@index([businessId, creditTransactionId])
+  @@index([businessId, paymentId])
+  @@map("SmsMessageV2")
+}
+
+/// Append-only business audit events. `userId` is nullable so records survive a
+/// former staff member being deactivated or removed.
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @db.Uuid
+  userId      String?  @map("actorId") @db.Uuid
+  action      String   @db.VarChar(100)
+  entityType  String   @db.VarChar(100)
+  entityId    String?  @db.VarChar(191)
+  description String?  @db.Text
+  beforeData  Json?
+  afterData   Json?
+  metadata    Json?
+  requestId   String?  @db.VarChar(100)
+  ipAddress   String?  @db.VarChar(64)
+  userAgent   String?  @db.VarChar(512)
+  createdAt   DateTime @default(now())
+
+  business Business @relation("BusinessAuditLogs", fields: [businessId], references: [id], onDelete: Restrict)
+  user     User?    @relation("AuditUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([businessId, entityType, entityId])
+  @@index([userId, createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Stage 1 legacy read-only mappings
+// -----------------------------------------------------------------------------
+// These models deliberately remain mapped to the original tables so applying the
+// Stage 2 migration is additive and preserves financial history. New server code
+// does not write them; the migration backfills the canonical models above.
+
+enum LegacyMembershipRole {
+  OWNER
+  MANAGER
+  CASHIER
+  VIEWER
+
+  @@map("MembershipRole")
+}
+
+enum LegacyLedgerEntryType {
+  CREDIT
+  PAYMENT
+  CREDIT_REVERSAL
+  PAYMENT_REVERSAL
+
+  @@map("LedgerEntryType")
+}
+
+enum LegacyPaymentMethod {
+  CASH
+  MOBILE_MONEY
+  BANK_TRANSFER
+  CARD
+  OTHER
+
+  @@map("PaymentMethod")
+}
+
+enum LegacyReminderKind {
+  DUE_SOON
+  DUE_TODAY
+  OVERDUE
+  MANUAL
+
+  @@map("ReminderKind")
+}
+
+enum LegacyReminderStatus {
+  PENDING
+  PROCESSING
+  SENT
+  SKIPPED
+  FAILED
+  CANCELLED
+
+  @@map("ReminderStatus")
+}
+
+enum LegacySmsKind {
+  REMINDER
+  PAYMENT_CONFIRMATION
+  CREDIT_CONFIRMATION
+  MANUAL
+
+  @@map("SmsKind")
+}
+
+model LegacyBusinessMembership {
+  id          String               @id @default(uuid()) @db.Uuid
+  businessId  String               @db.Uuid
+  userId      String               @db.Uuid
+  role        LegacyMembershipRole @default(CASHIER)
+  isActive    Boolean              @default(true)
+  invitedById String?              @db.Uuid
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  business  Business @relation("LegacyMembershipBusiness", fields: [businessId], references: [id], onDelete: Restrict)
+  user      User     @relation("LegacyMembershipUser", fields: [userId], references: [id], onDelete: Restrict)
+  invitedBy User?    @relation("LegacyMembershipInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, userId])
+  @@index([userId, isActive])
+  @@index([businessId, role, isActive])
+  @@map("BusinessMembership")
+}
+
+model LegacyLedgerEntry {
+  id               String                @id @default(uuid()) @db.Uuid
+  businessId       String                @db.Uuid
+  customerId       String                @db.Uuid
+  type             LegacyLedgerEntryType
+  amountTzs        Int
+  occurredAt       DateTime              @default(now())
+  dueDate          DateTime?             @db.Date
+  description      String?               @db.Text
+  paymentMethod    LegacyPaymentMethod?
+  paymentReference String?               @db.VarChar(120)
+  idempotencyKey   String?               @db.VarChar(191)
+  reversalOfId     String?               @unique @db.Uuid
+  reversalReason   String?               @db.Text
+  createdById      String?               @db.Uuid
+  createdAt        DateTime              @default(now())
+
+  business          Business                 @relation("LegacyLedgerBusiness", fields: [businessId], references: [id], onDelete: Restrict)
+  customer          Customer                 @relation("LegacyLedgerCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy         User?                    @relation("LegacyLedgerRecordedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  reversalOf        LegacyLedgerEntry?       @relation("LegacyLedgerReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversal          LegacyLedgerEntry?       @relation("LegacyLedgerReversal")
+  reminderSchedules LegacyReminderSchedule[] @relation("LegacyReminderLedger")
+  smsMessages       LegacySmsMessage[]       @relation("LegacySmsLedger")
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, customerId, occurredAt])
+  @@index([businessId, type, occurredAt])
+  @@index([customerId, dueDate])
+  @@index([businessId, paymentReference])
+  @@map("LedgerEntry")
+}
+
+model LegacyReminderSchedule {
+  id                 String               @id @default(uuid()) @db.Uuid
+  businessId         String               @db.Uuid
+  customerId         String               @db.Uuid
+  ledgerEntryId      String?              @db.Uuid
+  kind               LegacyReminderKind
+  status             LegacyReminderStatus @default(PENDING)
+  scheduledFor       DateTime
+  balanceSnapshotTzs Int?
+  language           Locale               @default(EN)
+  idempotencyKey     String               @unique @db.VarChar(191)
+  skippedReason      String?              @db.Text
+  cancelledAt        DateTime?
+  completedAt        DateTime?
+  createdById        String?              @db.Uuid
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  business    Business           @relation("LegacyReminderBusiness", fields: [businessId], references: [id], onDelete: Restrict)
+  customer    Customer           @relation("LegacyReminderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  ledgerEntry LegacyLedgerEntry? @relation("LegacyReminderLedger", fields: [ledgerEntryId], references: [id], onDelete: Restrict)
+  createdBy   User?              @relation("LegacyReminderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  smsMessage  LegacySmsMessage?  @relation("LegacySmsReminder")
+
+  @@index([status, scheduledFor])
+  @@index([businessId, customerId, scheduledFor])
+  @@index([ledgerEntryId, kind])
+  @@map("ReminderSchedule")
+}
+
+model LegacySmsMessage {
+  id                String        @id @default(uuid()) @db.Uuid
+  businessId        String        @db.Uuid
+  customerId        String?       @db.Uuid
+  ledgerEntryId     String?       @db.Uuid
+  reminderId        String?       @unique @db.Uuid
+  kind              LegacySmsKind
+  status            SmsStatus     @default(QUEUED)
+  provider          SmsProvider   @default(MOCK)
+  providerMessageId String?       @db.VarChar(191)
+  idempotencyKey    String        @unique @db.VarChar(191)
+  toPhone           String        @db.VarChar(32)
+  senderId          String?       @db.VarChar(32)
+  body              String        @db.Text
+  attemptCount      Int           @default(0)
+  scheduledFor      DateTime?
+  lastAttemptAt     DateTime?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  failedAt          DateTime?
+  errorCode         String?       @db.VarChar(100)
+  errorMessage      String?       @db.Text
+  createdById       String?       @db.Uuid
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  business    Business                @relation("LegacySmsBusiness", fields: [businessId], references: [id], onDelete: Restrict)
+  customer    Customer?               @relation("LegacySmsCustomer", fields: [customerId], references: [id], onDelete: SetNull)
+  ledgerEntry LegacyLedgerEntry?      @relation("LegacySmsLedger", fields: [ledgerEntryId], references: [id], onDelete: Restrict)
+  reminder    LegacyReminderSchedule? @relation("LegacySmsReminder", fields: [reminderId], references: [id], onDelete: Restrict)
+  createdBy   User?                   @relation("LegacySmsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerMessageId])
+  @@index([status, scheduledFor])
+  @@index([businessId, customerId, createdAt])
+  @@index([ledgerEntryId])
+  @@map("SmsMessage")
+}

@@ -1,0 +1,4 @@
+{
+  "extends": ["next/core-web-vitals", "next/typescript", "prettier"],
+  "ignorePatterns": [".next/", "node_modules/", "prisma/generated/", "next-env.d.ts"]
+}
