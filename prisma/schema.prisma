@@ -88,25 +88,27 @@ enum SmsStatus {
 // -----------------------------------------------------------------------------
 
 model Business {
-  id                          String   @id @default(uuid()) @db.Uuid
-  businessName                String   @map("name") @db.VarChar(160)
-  businessPhone               String?  @map("phone") @db.VarChar(32)
-  businessEmail               String?  @map("email") @db.VarChar(320)
-  address                     String?  @db.Text
-  currency                    String   @default("TZS") @db.Char(3)
-  timezone                    String   @default("Africa/Dar_es_Salaam") @db.VarChar(64)
-  language                    Locale   @default(EN) @map("locale")
-  active                      Boolean  @default(true) @map("isActive")
-  defaultCreditDueDays        Int      @default(7)
-  remindersEnabled            Boolean  @default(true)
-  reminderDaysBeforeDue       Int      @default(1)
-  overdueReminderIntervalDays Int      @default(7)
-  reminderLocalTime           String   @default("09:00") @db.VarChar(5)
-  sendPaymentConfirmations    Boolean  @default(true)
-  allowCustomerOverpayments   Boolean  @default(false)
-  smsSenderId                 String?  @db.VarChar(32)
-  createdAt                   DateTime @default(now())
-  updatedAt                   DateTime @updatedAt
+  id                          String    @id @default(uuid()) @db.Uuid
+  businessName                String    @map("name") @db.VarChar(160)
+  businessPhone               String?   @map("phone") @db.VarChar(32)
+  businessEmail               String?   @map("email") @db.VarChar(320)
+  address                     String?   @db.Text
+  currency                    String    @default("TZS") @db.Char(3)
+  timezone                    String    @default("Africa/Dar_es_Salaam") @db.VarChar(64)
+  language                    Locale    @default(EN) @map("locale")
+  active                      Boolean   @default(true) @map("isActive")
+  defaultCreditDueDays        Int       @default(7)
+  remindersEnabled            Boolean   @default(true)
+  reminderDaysBeforeDue       Int       @default(1)
+  overdueReminderIntervalDays Int       @default(7)
+  reminderLocalTime           String    @default("09:00") @db.VarChar(5)
+  sendPaymentConfirmations    Boolean   @default(true)
+  allowCustomerOverpayments   Boolean   @default(false)
+  smsSenderId                 String?   @db.VarChar(32)
+  onboardingStep              Int       @default(1)
+  onboardingCompletedAt       DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
 
   users              User[]              @relation("BusinessUsers")
   customers          Customer[]          @relation("BusinessCustomers")
@@ -128,18 +130,19 @@ model Business {
 }
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  businessId   String    @db.Uuid
-  name         String    @db.VarChar(160)
-  email        String    @unique @db.VarChar(320)
-  phone        String?   @db.VarChar(32)
-  passwordHash String    @db.VarChar(255)
-  role         UserRole  @default(STAFF)
-  active       Boolean   @default(true) @map("isActive")
-  language     Locale    @default(EN) @map("locale")
-  lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id                     String    @id @default(uuid()) @db.Uuid
+  businessId             String    @db.Uuid
+  name                   String    @db.VarChar(160)
+  email                  String?   @unique @db.VarChar(320)
+  phone                  String?   @unique @db.VarChar(32)
+  passwordHash           String    @db.VarChar(255)
+  role                   UserRole  @default(STAFF)
+  canReverseTransactions Boolean   @default(false)
+  active                 Boolean   @default(true) @map("isActive")
+  language               Locale    @default(EN) @map("locale")
+  lastLoginAt            DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   business                   Business             @relation("BusinessUsers", fields: [businessId], references: [id], onDelete: Restrict)
   createdCustomers           Customer[]           @relation("CustomerCreatedBy")
@@ -182,6 +185,15 @@ model UserSession {
 
   @@index([userId, expiresAt])
   @@index([expiresAt])
+}
+
+/// Shared atomic authentication throttles; keys never contain raw identifiers.
+model AuthRateLimit {
+  key     String   @id @db.VarChar(64)
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
 }
 
 model PasswordResetToken {

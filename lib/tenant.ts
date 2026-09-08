@@ -1,15 +1,12 @@
+import "server-only";
 import { redirect } from "next/navigation";
-import { getActiveBusinessId, getSession } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
+import { can, type Permission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export async function getCurrentActor() {
   const session = await getSession();
   if (!session) return null;
-
-  const requestedBusinessId = await getActiveBusinessId();
-  // A user is assigned to one tenant in Stage 2. Ignore a stale active-business
-  // cookie rather than allowing it to select another business by ID.
-  if (requestedBusinessId && requestedBusinessId !== session.user.businessId) return null;
 
   const user = await prisma.user.findFirst({
     where: {
@@ -17,7 +14,17 @@ export async function getCurrentActor() {
       active: true,
       business: { active: true },
     },
-    include: { business: true },
+    select: {
+      id: true,
+      businessId: true,
+      name: true,
+      email: true,
+      phone: true,
+      role: true,
+      active: true,
+      canReverseTransactions: true,
+      business: true,
+    },
   });
   if (!user) return null;
 
@@ -31,9 +38,17 @@ export async function getCurrentActor() {
   return { user, membership, business: user.business };
 }
 
-export async function requireActor() {
+export async function requireActor(options: { allowIncomplete?: boolean } = {}) {
   const actor = await getCurrentActor();
-  if (!actor) redirect("/sign-in");
+  if (!actor) redirect("/login");
+  if (!options.allowIncomplete && !actor.business.onboardingCompletedAt) redirect("/onboarding");
+  return actor;
+}
+
+export async function requirePermission(permission: Permission) {
+  const actor = await requireActor();
+  if (!can(actor.user.role, permission, actor.user.canReverseTransactions))
+    redirect("/access-denied");
   return actor;
 }
 

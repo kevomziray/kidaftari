@@ -7,14 +7,10 @@ import { writeAuditLog } from "@/lib/audit";
 import { assertSameOrigin } from "@/lib/csrf";
 import { assertPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { normalizeEmail, normalizeTanzanianPhone } from "@/lib/security";
+import { normalizeTanzanianPhone } from "@/lib/security";
 import { requireActor } from "@/lib/tenant";
-import {
-  businessSettingsSchema,
-  createStaffSchema,
-  invalidState,
-  type ActionState,
-} from "@/lib/validation";
+import { createStaffSchema } from "@/lib/auth-validation";
+import { businessSettingsSchema, invalidState, type ActionState } from "@/lib/validation";
 
 export async function updateBusinessSettingsAction(
   _: ActionState,
@@ -86,7 +82,7 @@ export async function updateBusinessSettingsAction(
   });
   revalidatePath("/settings");
   revalidatePath("/dashboard");
-  return { message: "Settings saved." };
+  return { success: true, message: "Settings saved." };
 }
 
 export async function createStaffAction(_: ActionState, formData: FormData): Promise<ActionState> {
@@ -95,7 +91,7 @@ export async function createStaffAction(_: ActionState, formData: FormData): Pro
   assertPermission(actor.membership.role, "manage_staff");
   const parsed = createStaffSchema.safeParse({
     name: formData.get("name"),
-    email: normalizeEmail(String(formData.get("email") ?? "")),
+    identifier: formData.get("identifier"),
     password: formData.get("password"),
     role: formData.get("role"),
   });
@@ -107,7 +103,7 @@ export async function createStaffAction(_: ActionState, formData: FormData): Pro
         data: {
           businessId: actor.business.id,
           name: parsed.data.name,
-          email: parsed.data.email,
+          ...parsed.data.identifier,
           passwordHash,
           role: "STAFF",
         },
@@ -128,13 +124,11 @@ export async function createStaffAction(_: ActionState, formData: FormData): Pro
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return {
-        message:
-          "A user with that email already exists. Staff invitations for existing accounts are not available yet.",
+        message: "Unable to create this account. Use a different phone or email.",
       };
     }
-    console.error("Staff creation failed", error);
     return { message: "We could not add the staff member. Please try again." };
   }
   revalidatePath("/staff");
-  return { message: "Staff member added. Share the temporary password securely." };
+  return { success: true, message: "Staff member added. Share their sign-in details securely." };
 }

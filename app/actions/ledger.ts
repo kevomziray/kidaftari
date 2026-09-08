@@ -245,7 +245,11 @@ export async function reverseTransactionAction(
 ): Promise<ActionState> {
   await assertSameOrigin();
   const actor = await requireActor();
-  assertPermission(actor.membership.role, "reverse_transactions");
+  assertPermission(
+    actor.membership.role,
+    "reverse_transactions",
+    actor.user.canReverseTransactions,
+  );
   const parsed = reversalSchema.safeParse({
     transactionId: formData.get("transactionId"),
     reason: formData.get("reason"),
@@ -413,7 +417,7 @@ export async function queueManualReminderAction(
       );
     });
     revalidatePath(`/customers/${customer.id}`);
-    return { message: "Reminder queued. It will be sent shortly." };
+    return { success: true, message: "Reminder queued. It will be sent shortly." };
   } catch (error) {
     return actionError(error);
   }

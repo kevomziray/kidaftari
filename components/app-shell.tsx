@@ -36,12 +36,19 @@ export function AppShell({
               {t(locale, item.key)}
             </Link>
           ))}
-          <Link href="/reports">
-            <span>▥</span>Reports
-          </Link>
-          <Link href="/reminders">
-            <span>✉</span>Reminders
-          </Link>
+          {role === "OWNER" ? (
+            <>
+              <Link href="/reports">
+                <span>▥</span>Reports
+              </Link>
+              <Link href="/reminders">
+                <span>✉</span>Reminders
+              </Link>
+              <Link href="/staff">
+                <span>♙</span>Staff
+              </Link>
+            </>
+          ) : null}
           <Link href="/more">
             <span>•••</span>
             {t(locale, "more")}
@@ -54,7 +61,7 @@ export function AppShell({
             <small>{role.toLowerCase()}</small>
           </div>
           <form action={signOutAction}>
-            <button className="text-button" title="Sign out">
+            <button className="text-button" title="Sign out" aria-label="Sign out">
               ↪
             </button>
           </form>

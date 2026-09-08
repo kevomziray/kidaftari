@@ -50,9 +50,15 @@ Active credits total TZS 155,000. Active payments total TZS 45,000. Outstanding 
 
 ## Local preview limitation
 
-The database checks above passed directly against Supabase. The local `node --import tsx prisma/verify.ts` command could not run: Windows sandbox execution failed at `uv_os_get_passwd`, and automatic approval review rejected the request to run that read-only command outside the sandbox because the review service reported a usage limit. Earlier local Prisma connection checks also failed. End-to-end local sign-in and preview therefore remain unverified.
+The database checks above passed directly against Supabase. A read-only recheck on September 8, 2026 confirmed one business, four customers, four credits, three payments, TZS 110,000 outstanding, and both Prisma migrations applied without rollback.
 
-Once the local runtime and database connection work, use `pnpm db:verify` and sign in with the development credentials in the main README. The Supabase migration and seed do not need to be repeated.
+The `db:verify` command now explicitly loads the ignored local `.env` file before running the verification script. Previously, invoking the script directly did not load that configuration.
+
+The remaining sign-in blocker is the saved database credential. A read-only Prisma test outside the Windows sandbox reached the transaction pooler on port 6543 but returned an authentication failure. Testing the possible password escape correction also failed. After the user updated the local password, `pnpm db:verify` could not connect through the session pooler on port 5432; a transaction-pooler check again returned an authentication failure. The hostname, project username, database path, and password URL formatting showed no obvious issue. The agent did not overwrite the user's local connection settings. Inside the sandbox, the same test fails earlier at TLS, so that environment cannot establish whether a password is valid.
+
+After correcting the database password in the ignored local `.env` file, run `pnpm db:verify` and sign in with the development credentials in the main README. End-to-end sign-in and the authenticated dashboard remain unverified. The Supabase migration and seed do not need to be repeated.
+
+The September 8 checks passed: `pnpm build` (including TypeScript checks), `pnpm lint`, `pnpm db:validate`, formatting for the changed files, and `git diff --check`. The public landing page and sign-in form were verified in the browser at `http://127.0.0.1:3000/` and `/login`. The landing page's example dashboard is illustrative; it is not the authenticated demo business. No schema changes, financial-record changes, or SMS sends were made during this preview work.
 
 ## Reusable SQL checks
 

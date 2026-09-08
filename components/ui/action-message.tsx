@@ -5,9 +5,9 @@ export function ActionMessage({ state }: { state: ActionState }) {
   return (
     <p
       className={
-        state.errors ? "form-message form-message-error" : "form-message form-message-success"
+        state.success ? "form-message form-message-success" : "form-message form-message-error"
       }
-      role="status"
+      role={state.success ? "status" : "alert"}
     >
       {state.message}
     </p>

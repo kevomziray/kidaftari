@@ -2,7 +2,7 @@
 
 **Your Digital Credit Notebook** — a simple, mobile-first credit notebook for Tanzanian businesses.
 
-Stage 2 adds the secure PostgreSQL/Prisma foundation: tenant-scoped businesses and users, customers, immutable credit and payment records, reminders, provider-neutral SMS logs, audit trails, a development seed, and server-only balance/history helpers.
+Stage 3 adds secure phone/email registration and login, revocable database sessions, role-based authorization, persistent login throttling, and a five-step business onboarding flow on top of the Stage 2 credit foundation.
 
 ## Technology
 
@@ -28,7 +28,7 @@ public/        Static assets
 
 ## Requirements
 
-- Node.js 20.9+ (Node 22 LTS recommended)
+- Node.js 20.19+ (Node 22 LTS recommended)
 - pnpm 11+
 - PostgreSQL 15+
 
@@ -92,6 +92,8 @@ Never commit `.env` or put secrets in `NEXT_PUBLIC_*` variables.
 | ---------------------------------- | ----------------------------------------------------- |
 | `pnpm dev`                         | Run the development server                            |
 | `pnpm lint`                        | Run ESLint                                            |
+| `pnpm test`                        | Run authentication and authorization regression tests |
+| `pnpm typecheck`                   | Check TypeScript without emitting files               |
 | `pnpm format`                      | Check formatting with Prettier                        |
 | `pnpm format:write`                | Apply Prettier formatting                             |
 | `pnpm db:validate`                 | Validate the Prisma schema                            |
@@ -138,6 +140,8 @@ The public helpers derive or verify the signed-in tenant. Background work can us
 Run `pnpm db:verify` after seeding to confirm the tenant relationships and expected TZS 110,000 outstanding balance.
 
 The approved Supabase development deployment is complete. See [Stage 2 verification](docs/stage-2-verification.md) for the applied migrations, demo balances, database checks, and remaining local-preview limitation.
+
+See [Stage 3 verification](docs/stage-3-verification.md) for the deployed migration and verification results, and [Stage 3 testing](docs/stage-3-testing.md) for registration, login, logout, permission, unauthorized-route, and cross-business test instructions.
 
 Demo sign-in credentials (development only):
 

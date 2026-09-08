@@ -15,18 +15,6 @@ const money = z.coerce
 
 const dateText = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose a valid date.");
 
-export const registerSchema = z.object({
-  name: requiredText("Your name"),
-  email: z.string().trim().email("Enter a valid email address.").max(320),
-  password: z.string().min(10, "Use at least 10 characters.").max(128),
-  businessName: requiredText("Business name"),
-});
-
-export const signInSchema = z.object({
-  email: z.string().trim().email("Enter a valid email address.").max(320),
-  password: z.string().min(1, "Password is required.").max(128),
-});
-
 export const customerSchema = z.object({
   fullName: requiredText("Customer name"),
   phone: optionalText(32),
@@ -87,14 +75,11 @@ export const businessSettingsSchema = z.object({
   sendPaymentConfirmations: z.enum(["true", "false"]).transform((value) => value === "true"),
 });
 
-export const createStaffSchema = z.object({
-  name: requiredText("Name"),
-  email: z.string().trim().email("Enter a valid email address.").max(320),
-  password: z.string().min(10, "Use at least 10 characters.").max(128),
-  role: z.literal("STAFF").optional(),
-});
-
-export type ActionState = { message?: string; errors?: Record<string, string[] | undefined> };
+export type ActionState = {
+  message?: string;
+  success?: boolean;
+  errors?: Record<string, string[] | undefined>;
+};
 
 export function invalidState(error: z.ZodError): ActionState {
   return { message: "Please correct the highlighted fields.", errors: error.flatten().fieldErrors };

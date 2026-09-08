@@ -3,40 +3,46 @@
 import bcrypt from "bcryptjs";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
-import { createSession, destroySession, getSession, setActiveBusiness } from "@/lib/auth";
+import { destroySession, revokeCurrentSession, setSessionCookie } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
 import { assertSameOrigin } from "@/lib/csrf";
 import { prisma } from "@/lib/prisma";
-import { checkRateLimit } from "@/lib/rate-limit";
-import { normalizeEmail } from "@/lib/security";
-import { invalidState, registerSchema, signInSchema, type ActionState } from "@/lib/validation";
+import { checkAuthRateLimit, consumeAuthLimit } from "@/lib/auth-rate-limit";
+import { newSession } from "@/lib/session-token";
+import { registerSchema, signInSchema } from "@/lib/auth-validation";
+import { invalidState, type ActionState } from "@/lib/validation";
+
+// Unknown accounts still perform the same password work as known accounts.
+const DUMMY_HASH = bcrypt.hashSync("dummy-account-timing-check", 12);
 
 export async function registerAction(_: ActionState, formData: FormData): Promise<ActionState> {
-  await assertSameOrigin();
-  const parsed = registerSchema.safeParse({
-    name: formData.get("name"),
-    email: normalizeEmail(String(formData.get("email") ?? "")),
-    password: formData.get("password"),
-    businessName: formData.get("businessName"),
-  });
-  if (!parsed.success) return invalidState(parsed.error);
-
-  const limit = checkRateLimit(`register:${parsed.data.email}`, 5, 60 * 60 * 1000);
-  if (!limit.allowed) return { message: `Please try again in ${limit.retryAfterSeconds} seconds.` };
-
   try {
-    const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-    const result = await prisma.$transaction(async (tx) => {
+    await assertSameOrigin();
+    const parsed = registerSchema.safeParse(Object.fromEntries(formData));
+    if (!parsed.success) return invalidState(parsed.error);
+    const { identifier, password, ...profile } = parsed.data;
+    const limit = await checkAuthRateLimit("register", identifier.email ?? identifier.phone!);
+    if (!limit.allowed)
+      return { message: `Too many attempts. Try again in ${limit.retryAfterSeconds} seconds.` };
+    const passwordHash = await bcrypt.hash(password, 12);
+    const { token, ...sessionData } = newSession();
+    await prisma.$transaction(async (tx) => {
       const business = await tx.business.create({
-        data: { businessName: parsed.data.businessName },
+        data: {
+          businessName: profile.businessName,
+          businessPhone: profile.businessPhone,
+          remindersEnabled: false,
+          sendPaymentConfirmations: false,
+        },
       });
       const user = await tx.user.create({
         data: {
           businessId: business.id,
-          name: parsed.data.name,
-          email: parsed.data.email,
+          name: profile.name,
+          ...identifier,
           passwordHash,
           role: "OWNER",
+          lastLoginAt: new Date(),
         },
       });
       await writeAuditLog(
@@ -46,65 +52,73 @@ export async function registerAction(_: ActionState, formData: FormData): Promis
           action: "BUSINESS_CREATED",
           entityType: "Business",
           entityId: business.id,
-          description: "Business created during registration.",
-          afterData: { businessName: business.businessName },
+          description: "Business and owner created during registration.",
         },
         tx,
       );
-      return { user, business };
+      await revokeCurrentSession(tx);
+      await tx.userSession.create({ data: { userId: user.id, ...sessionData } });
     });
-    await createSession(result.user.id);
-    await setActiveBusiness(result.business.id);
+    await setSessionCookie(token, sessionData.expiresAt);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return { message: "An account with that email already exists. Please sign in instead." };
+      return {
+        message:
+          "Unable to register with these details. Try signing in or use a different phone or email.",
+      };
     }
-    console.error("Registration failed", error);
-    return { message: "We could not create your account. Please try again." };
+    // Never expose database errors, credentials, form data or password hashes.
+    return {
+      message:
+        "We could not create your account. Refresh the page and try again. If you already registered, sign in.",
+    };
   }
-  redirect("/dashboard?welcome=1");
+  redirect("/onboarding");
 }
 
 export async function signInAction(_: ActionState, formData: FormData): Promise<ActionState> {
-  await assertSameOrigin();
-  const parsed = signInSchema.safeParse({
-    email: normalizeEmail(String(formData.get("email") ?? "")),
-    password: formData.get("password"),
-  });
-  if (!parsed.success) return invalidState(parsed.error);
-
-  const limit = checkRateLimit(`signin:${parsed.data.email}`, 10, 15 * 60 * 1000);
-  if (!limit.allowed)
-    return { message: `Too many attempts. Please wait ${limit.retryAfterSeconds} seconds.` };
-
-  const user = await prisma.user.findFirst({
-    where: { email: parsed.data.email, active: true, business: { active: true } },
-    include: { business: true },
-  });
-  if (!user || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
-    return { message: "Email or password is incorrect." };
+  let destination = "/dashboard";
+  try {
+    await assertSameOrigin();
+    const parsed = signInSchema.safeParse(Object.fromEntries(formData));
+    if (!parsed.success) return invalidState(parsed.error);
+    const { identifier, password } = parsed.data;
+    const limit = await checkAuthRateLimit("signin", identifier.email ?? identifier.phone!);
+    if (!limit.allowed)
+      return { message: `Too many attempts. Please wait ${limit.retryAfterSeconds} seconds.` };
+    const user = await prisma.user.findFirst({
+      where: {
+        ...(identifier.email ? { email: identifier.email } : { phone: identifier.phone }),
+        active: true,
+        business: { active: true },
+      },
+      include: { business: { select: { onboardingCompletedAt: true } } },
+    });
+    if (user) {
+      const accountLimit = await consumeAuthLimit(`signin:user:${user.id}`, 10, 15 * 60);
+      if (!accountLimit.allowed)
+        return {
+          message: `Too many attempts. Please wait ${accountLimit.retryAfterSeconds} seconds.`,
+        };
+    }
+    const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+    if (!user || !valid) return { message: "Phone/email or password is incorrect." };
+    const { token, ...sessionData } = newSession();
+    await prisma.$transaction(async (tx) => {
+      await revokeCurrentSession(tx);
+      await tx.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+      await tx.userSession.create({ data: { userId: user.id, ...sessionData } });
+    });
+    await setSessionCookie(token, sessionData.expiresAt);
+    if (!user.business.onboardingCompletedAt) destination = "/onboarding";
+  } catch {
+    return { message: "Sign-in is temporarily unavailable. Refresh the page and try again." };
   }
-  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-  await createSession(user.id);
-  await setActiveBusiness(user.businessId);
-  redirect("/dashboard");
+  redirect(destination);
 }
 
 export async function signOutAction() {
   await assertSameOrigin();
   await destroySession();
-  redirect("/sign-in");
-}
-
-export async function switchBusinessAction(formData: FormData) {
-  await assertSameOrigin();
-  const businessId = String(formData.get("businessId") ?? "");
-  const session = await getSession();
-  if (!session) redirect("/sign-in");
-  const user = await prisma.user.findFirst({
-    where: { id: session.userId, businessId, active: true, business: { active: true } },
-  });
-  if (!user) throw new Error("You do not have access to this business.");
-  await setActiveBusiness(businessId);
-  redirect("/dashboard");
+  redirect("/login");
 }

@@ -17,7 +17,7 @@ export async function createCustomerAction(
 ): Promise<ActionState> {
   await assertSameOrigin();
   const actor = await requireActor();
-  assertPermission(actor.membership.role, "manage_customers");
+  assertPermission(actor.membership.role, "add_customers");
   const defaultDueRaw = String(formData.get("defaultDueDays") ?? "").trim();
   const parsed = customerSchema.safeParse({
     fullName: formData.get("fullName"),

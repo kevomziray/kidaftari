@@ -34,7 +34,11 @@ export default async function CustomerDetailPage({
   const flags = await searchParams;
   const customer = await getCustomerDetail(actor.business.id, customerId);
   if (!customer) notFound();
-  const canReverse = can(actor.membership.role, "reverse_transactions");
+  const canReverse = can(
+    actor.membership.role,
+    "reverse_transactions",
+    actor.user.canReverseTransactions,
+  );
   const flash = flags.created
     ? "Customer added successfully."
     : flags.credit === "recorded"

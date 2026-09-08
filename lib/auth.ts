@@ -1,79 +1,68 @@
-import { createHash, randomBytes } from "crypto";
+import "server-only";
 import { cookies } from "next/headers";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  hashToken,
+  isSessionToken,
+  SESSION_COOKIE,
+  SESSION_IDLE_SECONDS,
+  SESSION_MAX_AGE_SECONDS,
+} from "@/lib/session-token";
 
-const SESSION_COOKIE = "kidaftari_session";
-const ACTIVE_BUSINESS_COOKIE = "kidaftari_business";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
-
-function hashToken(value: string) {
-  return createHash("sha256").update(value).digest("hex");
+export async function revokeCurrentSession(tx: Prisma.TransactionClient = prisma) {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (token && isSessionToken(token)) {
+    await tx.userSession.updateMany({
+      where: { tokenHash: hashToken(token), revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
 }
 
-const secureCookie = {
-  httpOnly: true,
-  sameSite: "lax" as const,
-  secure: process.env.NODE_ENV === "production",
-  path: "/",
-};
-
-export async function createSession(userId: string) {
-  const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000);
-  await prisma.userSession.create({
-    data: { userId, tokenHash: hashToken(token), expiresAt },
+export async function setSessionCookie(token: string, expiresAt: Date) {
+  const store = await cookies();
+  store.set(SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    expires: expiresAt,
   });
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, token, { ...secureCookie, expires: expiresAt });
+  store.delete("kidaftari_business");
 }
 
 export async function getSession() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
-
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token || !isSessionToken(token)) return null;
+  const now = Date.now();
+  const idleSince = new Date(now - SESSION_IDLE_SECONDS * 1000);
   const session = await prisma.userSession.findFirst({
     where: {
       tokenHash: hashToken(token),
       revokedAt: null,
-      expiresAt: { gt: new Date() },
-      user: { active: true },
+      expiresAt: { gt: new Date(now) },
+      createdAt: { gt: new Date(now - SESSION_MAX_AGE_SECONDS * 1000) },
+      OR: [{ lastUsedAt: { gt: idleSince } }, { lastUsedAt: null, createdAt: { gt: idleSince } }],
+      user: { active: true, business: { active: true } },
     },
-    include: { user: true },
+    select: { id: true, userId: true, lastUsedAt: true },
   });
   if (!session) return null;
-
-  void prisma.userSession
-    .update({ where: { id: session.id }, data: { lastUsedAt: new Date() } })
-    .catch(() => undefined);
-
+  if (!session.lastUsedAt || session.lastUsedAt.getTime() < now - 5 * 60 * 1000) {
+    const touched = await prisma.userSession.updateMany({
+      where: { id: session.id, revokedAt: null, expiresAt: { gt: new Date(now) } },
+      data: { lastUsedAt: new Date(now) },
+    });
+    if (!touched.count) return null;
+  }
   return session;
 }
 
-export async function setActiveBusiness(businessId: string) {
-  const cookieStore = await cookies();
-  cookieStore.set(ACTIVE_BUSINESS_COOKIE, businessId, {
-    ...secureCookie,
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
-}
-
-export async function getActiveBusinessId() {
-  const cookieStore = await cookies();
-  return cookieStore.get(ACTIVE_BUSINESS_COOKIE)?.value ?? null;
-}
-
 export async function destroySession() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE)?.value;
-  if (token) {
-    await prisma.userSession
-      .updateMany({
-        where: { tokenHash: hashToken(token), revokedAt: null },
-        data: { revokedAt: new Date() },
-      })
-      .catch(() => undefined);
-  }
-  cookieStore.delete(SESSION_COOKIE);
-  cookieStore.delete(ACTIVE_BUSINESS_COOKIE);
+  // A failed server revocation must not be reported as a successful logout.
+  await revokeCurrentSession();
+  const store = await cookies();
+  store.delete(SESSION_COOKIE);
+  store.delete("kidaftari_business");
 }

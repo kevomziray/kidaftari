@@ -1,16 +1,26 @@
 import { PageHeader } from "@/components/page-header";
-import { RoutePlaceholder } from "@/components/route-placeholder";
+import { BusinessSettingsForm } from "@/components/auth/business-settings-form";
+import { requirePermission } from "@/lib/tenant";
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  const { business: b } = await requirePermission("manage_business");
   return (
     <>
-      <PageHeader
-        title="Settings"
-        description="Keep your business details and preferences up to date."
-      />
-      <RoutePlaceholder
-        title="Business settings"
-        description="This Stage 1 route is ready for business profile, language, staff, and reminder settings."
+      <PageHeader title="Settings" description="Your business details and preferences." />
+      <BusinessSettingsForm
+        business={{
+          businessName: b.businessName,
+          businessPhone: b.businessPhone,
+          businessEmail: b.businessEmail,
+          address: b.address,
+          language: b.language,
+          defaultCreditDueDays: b.defaultCreditDueDays,
+          remindersEnabled: b.remindersEnabled,
+          reminderDaysBeforeDue: b.reminderDaysBeforeDue,
+          overdueReminderIntervalDays: b.overdueReminderIntervalDays,
+          reminderLocalTime: b.reminderLocalTime,
+          sendPaymentConfirmations: b.sendPaymentConfirmations,
+        }}
       />
     </>
   );
