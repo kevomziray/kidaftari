@@ -1,10 +1,8 @@
 import Link from "next/link";
 import { CustomerForm } from "@/components/customers/customer-form";
 import { PageHeader } from "@/components/page-header";
-import { requireActor } from "@/lib/tenant";
 
 export default async function NewCustomerPage() {
-  const actor = await requireActor();
   return (
     <>
       <PageHeader
@@ -16,7 +14,7 @@ export default async function NewCustomerPage() {
           </Link>
         }
       />
-      <CustomerForm defaultDueDays={actor.business.defaultCreditDueDays} />
+      <CustomerForm />
     </>
   );
 }

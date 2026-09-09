@@ -38,14 +38,20 @@ export async function materializeDueReminders(limit = 50) {
       reminder.customerId,
     );
     const phoneNumber = reminder.customer.phone ?? reminder.customer.normalizedPhone;
-    if (balanceTzs === null || balanceTzs <= 0 || !phoneNumber) {
+    if (
+      balanceTzs === null ||
+      balanceTzs <= 0 ||
+      !phoneNumber ||
+      !reminder.customer.reminderEnabled
+    ) {
       await prisma.reminder.update({
         where: { id: reminder.id },
         data: {
           status: "CANCELLED",
           processingAt: null,
-          failureReason:
-            balanceTzs === null || balanceTzs <= 0
+          failureReason: !reminder.customer.reminderEnabled
+            ? "Customer reminders are disabled."
+            : balanceTzs === null || balanceTzs <= 0
               ? "Customer balance is settled."
               : "Customer has no valid mobile number.",
         },

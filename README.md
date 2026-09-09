@@ -2,7 +2,7 @@
 
 **Your Digital Credit Notebook** — a simple, mobile-first credit notebook for Tanzanian businesses.
 
-Stage 3 adds secure phone/email registration and login, revocable database sessions, role-based authorization, persistent login throttling, and a five-step business onboarding flow on top of the Stage 2 credit foundation.
+Stage 4 adds tenant-safe customer creation, readable customer numbers, search and balance filters, customer editing and deactivation, customer financial summaries, and running transaction histories on top of the secure Stage 3 account foundation.
 
 ## Technology
 
@@ -92,7 +92,7 @@ Never commit `.env` or put secrets in `NEXT_PUBLIC_*` variables.
 | ---------------------------------- | ----------------------------------------------------- |
 | `pnpm dev`                         | Run the development server                            |
 | `pnpm lint`                        | Run ESLint                                            |
-| `pnpm test`                        | Run authentication and authorization regression tests |
+| `pnpm test`                        | Run authentication, authorization, and customer tests |
 | `pnpm typecheck`                   | Check TypeScript without emitting files               |
 | `pnpm format`                      | Check formatting with Prettier                        |
 | `pnpm format:write`                | Apply Prettier formatting                             |
@@ -142,6 +142,10 @@ Run `pnpm db:verify` after seeding to confirm the tenant relationships and expec
 The approved Supabase development deployment is complete. See [Stage 2 verification](docs/stage-2-verification.md) for the applied migrations, demo balances, database checks, and remaining local-preview limitation.
 
 See [Stage 3 verification](docs/stage-3-verification.md) for the deployed migration and verification results, and [Stage 3 testing](docs/stage-3-testing.md) for registration, login, logout, permission, unauthorized-route, and cross-business test instructions.
+
+See [Stage 4 testing](docs/stage-4-testing.md) for customer creation, search, editing, profile, deactivation, balance, and tenant-isolation checks.
+
+See [Stage 4 verification](docs/stage-4-verification.md) for the applied migration, preserved development data, automated checks, and Supabase security review.
 
 Demo sign-in credentials (development only):
 

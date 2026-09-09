@@ -6,10 +6,12 @@ import type { ReactNode } from "react";
 export function Dialog({
   trigger,
   title,
+  triggerClassName = "btn-secondary",
   children,
 }: {
   trigger: ReactNode;
   title: string;
+  triggerClassName?: string;
   children: ReactNode;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -17,7 +19,7 @@ export function Dialog({
     <>
       <button
         type="button"
-        className="btn-secondary"
+        className={triggerClassName}
         onClick={() => dialogRef.current?.showModal()}
       >
         {trigger}

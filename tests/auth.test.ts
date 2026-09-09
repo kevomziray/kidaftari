@@ -63,7 +63,11 @@ import { assertSameOrigin } from "@/lib/csrf";
 import { saveOnboardingStepAction } from "@/app/actions/onboarding";
 import { updateStaffAccessAction } from "@/app/actions/staff";
 import { createStaffAction, updateBusinessSettingsAction } from "@/app/actions/business";
-import { archiveCustomerAction } from "@/app/actions/customers";
+import {
+  archiveCustomerAction,
+  createCustomerAction,
+  updateCustomerAction,
+} from "@/app/actions/customers";
 import {
   reverseTransactionAction,
   recordCreditAction,
@@ -457,5 +461,122 @@ describe("onboarding and staff authorization", () => {
     expect(mocks.db.userSession.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: otherId, revokedAt: null } }),
     );
+  });
+});
+
+describe("stage 4 customer mutations", () => {
+  const customerFields = {
+    fullName: "Neema Juma",
+    phone: "0712 345 678",
+    alternativePhone: "0755 111 222",
+    address: "Mwanza",
+    creditLimit: "50000",
+    reminderEnabled: "on",
+    reminderFrequency: "7",
+    preferredLanguage: "SW",
+    notes: "Pays on Fridays",
+  };
+
+  it("creates the next readable number atomically for the signed-in business", async () => {
+    signedIn("STAFF");
+    mocks.db.business.update.mockResolvedValue({ nextCustomerNumber: 2 });
+    mocks.db.customer.create.mockResolvedValue({
+      id: otherId,
+      customerNumber: "KDF-000001",
+      fullName: "Neema Juma",
+      phone: "+255712345678",
+    });
+
+    await expect(createCustomerAction({}, form(customerFields))).rejects.toThrow(
+      "REDIRECT:/customers/" + otherId + "?created=1",
+    );
+    expect(mocks.db.business.update).toHaveBeenCalledWith({
+      where: { id: businessId },
+      data: { nextCustomerNumber: { increment: 1 } },
+      select: { nextCustomerNumber: true },
+    });
+    expect(mocks.db.customer.create.mock.calls[0][0].data).toMatchObject({
+      businessId,
+      customerNumber: "KDF-000001",
+      phone: "+255712345678",
+      alternativePhone: "+255755111222",
+      preferredLanguage: "SW",
+      createdById: userId,
+    });
+  });
+
+  it("validates required Tanzania phone numbers before writing", async () => {
+    signedIn("STAFF");
+    const result = await createCustomerAction(
+      {},
+      form({ ...customerFields, phone: "020 123 4567" }),
+    );
+    expect(result.message).toContain("Tanzanian mobile");
+    expect(mocks.db.customer.create).not.toHaveBeenCalled();
+  });
+
+  it("scopes edits to active customers in the signed-in business", async () => {
+    signedIn();
+    mocks.db.customer.findFirst.mockResolvedValue(null);
+    const result = await updateCustomerAction(
+      {},
+      form({ ...customerFields, customerId: otherId, businessId: "forged" }),
+    );
+    expect(result.message).toContain("not found");
+    expect(mocks.db.customer.findFirst).toHaveBeenCalledWith({
+      where: { id: otherId, businessId, active: true },
+    });
+    expect(mocks.db.customer.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("updates customer details without changing the customer number or tenant", async () => {
+    signedIn();
+    mocks.db.customer.findFirst.mockResolvedValue({
+      id: otherId,
+      businessId,
+      customerNumber: "KDF-000001",
+      fullName: "Old Name",
+      phone: "+255712000000",
+      creditLimit: null,
+    });
+    mocks.db.customer.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(
+      updateCustomerAction({}, form({ ...customerFields, customerId: otherId })),
+    ).rejects.toThrow("REDIRECT:/customers/" + otherId + "?updated=1");
+    const update = mocks.db.customer.updateMany.mock.calls[0][0];
+    expect(update.where).toEqual({ id: otherId, businessId, active: true });
+    expect(update.data).toMatchObject({
+      fullName: "Neema Juma",
+      phone: "+255712345678",
+      creditLimit: 50000,
+      updatedById: userId,
+    });
+    expect(update.data).not.toHaveProperty("customerNumber");
+    expect(update.data).not.toHaveProperty("businessId");
+  });
+
+  it("deactivates without deleting financial history", async () => {
+    signedIn();
+    mocks.db.customer.findFirst.mockResolvedValue({
+      id: otherId,
+      fullName: "Neema Juma",
+      _count: { creditTransactions: 2, payments: 1 },
+    });
+    mocks.db.customer.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(archiveCustomerAction(otherId)).rejects.toThrow(
+      "REDIRECT:/customers?deactivated=1",
+    );
+    expect(mocks.db.customer.updateMany).toHaveBeenCalledWith({
+      where: { id: otherId, businessId, active: true },
+      data: {
+        active: false,
+        archivedAt: expect.any(Date),
+        updatedById: userId,
+      },
+    });
+    expect(mocks.db.creditTransaction.updateMany).not.toHaveBeenCalled();
+    expect(mocks.db.payment.updateMany).not.toHaveBeenCalled();
   });
 });

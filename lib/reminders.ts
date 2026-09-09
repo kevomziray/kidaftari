@@ -16,6 +16,7 @@ type ReminderCustomer = {
   id: string;
   fullName: string;
   reminderEnabled: boolean;
+  preferredLanguage: Locale;
 };
 
 type ScheduleInput = {
@@ -67,7 +68,7 @@ export async function scheduleCreditReminders(db: Prisma.TransactionClient, inpu
         kind: job.kind,
         scheduledAt: job.scheduledAt < new Date() ? new Date() : job.scheduledAt,
         message: reminderText(
-          business.language,
+          customer.preferredLanguage,
           business.businessName,
           customer.fullName,
           balance,

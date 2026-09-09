@@ -17,17 +17,17 @@ const dateText = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose a valid date.")
 
 export const customerSchema = z.object({
   fullName: requiredText("Customer name"),
-  phone: optionalText(32),
-  email: z
-    .string()
-    .trim()
-    .email("Enter a valid email address.")
-    .max(320)
-    .optional()
-    .or(z.literal("")),
+  phone: requiredText("Phone number", 32),
+  alternativePhone: optionalText(32),
   address: optionalText(1000),
   notes: optionalText(2000),
-  defaultDueDays: z.coerce.number().int().min(0).max(365).optional(),
+  creditLimit: z.preprocess(
+    (value) => (value === "" || value === null ? undefined : value),
+    z.coerce.number().int().min(0).max(MAX_TZS_AMOUNT).optional(),
+  ),
+  reminderEnabled: z.boolean(),
+  reminderFrequency: z.coerce.number().int().min(1).max(365),
+  preferredLanguage: z.enum(["EN", "SW"]),
 });
 
 export const creditSchema = z.object({

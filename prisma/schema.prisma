@@ -107,6 +107,7 @@ model Business {
   smsSenderId                 String?   @db.VarChar(32)
   onboardingStep              Int       @default(1)
   onboardingCompletedAt       DateTime?
+  nextCustomerNumber          Int       @default(1)
   createdAt                   DateTime  @default(now())
   updatedAt                   DateTime  @updatedAt
 

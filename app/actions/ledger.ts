@@ -200,7 +200,7 @@ export async function recordPaymentAction(
             paymentId: payment.id,
             phoneNumber: customer.phone ?? customer.normalizedPhone,
             senderId: actor.business.smsSenderId ?? process.env.SMS_SENDER_ID ?? null,
-            locale: actor.business.language,
+            locale: customer.preferredLanguage,
             businessName: actor.business.businessName,
             amountTzs: payment.amount,
             balanceTzs: remainingTzs,
@@ -373,7 +373,7 @@ export async function queueManualReminderAction(
     }
     await prisma.$transaction(async (tx) => {
       const message = reminderText(
-        actor.business.language,
+        customer.preferredLanguage,
         actor.business.businessName,
         customer.fullName,
         balanceTzs,
